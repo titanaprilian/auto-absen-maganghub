@@ -122,8 +122,8 @@ Berkas `.env` menyimpan seluruh konfigurasi. Tabel berikut memuat setiap variabe
 | `ACTIVITY_LOG` | Ya | Isian kolom aktivitas harian |
 | `LESSON_LEARNED` | Ya | Isian kolom pelajaran hari ini |
 | `OBSTACLES` | Ya | Isian kolom kendala harian |
-| `TELEGRAM_BOT_TOKEN` | Tidak | Token bot Telegram untuk notifikasi. Kosong berarti notifikasi mati |
-| `TELEGRAM_CHAT_ID` | Tidak | ID chat Telegram tujuan notifikasi. Kosong berarti notifikasi mati |
+| `TELEGRAM_BOT_TOKEN` | Tidak | Token Bot API Telegram untuk notifikasi dan perintah bot |
+| `TELEGRAM_CHAT_ID` | Tidak | ID chat privat yang diizinkan dan tujuan notifikasi |
 
 Program juga membaca `API_BASE` dan `AUTH_BASE`. Nilai bawaan kedua variabel itu sudah mengarah ke API Monev resmi. Ubah kedua nilai itu hanya jika alamat API berubah.
 
@@ -418,6 +418,31 @@ Program mengirim pesan WhatsApp setiap kali absen berhasil atau gagal, serta men
 Panduan lengkap setup akun Twilio, aktivasi WhatsApp Sandbox, hingga konfigurasi variabel tersedia di berkas terpisah:
 👉 **[Lihat Panduan Setup Twilio (TWILIO_SETUP.md)](TWILIO_SETUP.md)**.
 
+## Perintah Bot Telegram
+
+Long polling memungkinkan satu chat privat yang diizinkan melihat seluruh entri di `logs_pool.json`, termasuk entri yang sudah digunakan, dan mengubah tiga nilai fallback (`ACTIVITY_LOG`, `LESSON_LEARNED`, dan `OBSTACLES`) pada file `.env` proyek. Bot berjalan sebagai proses persisten di VPS. Bot tidak memerlukan koneksi database, username target, endpoint publik, atau webhook.
+
+Konfigurasikan `TELEGRAM_BOT_TOKEN` dan `TELEGRAM_CHAT_ID` di `.env`. `TELEGRAM_CHAT_ID` harus ID chat privat yang diizinkan untuk menjalankan perintah dan menerima notifikasi. `TELEGRAM_TARGET_USERNAME` dan `TELEGRAM_WEBHOOK_SECRET` tidak diperlukan oleh mode long polling.
+
+Worker menggunakan long polling, jadi VPS tidak perlu membuka endpoint HTTP publik. Dari root proyek, jalankan:
+
+```bash
+chmod +x run_telegram_bot.sh setup_telegram_bot.sh
+./setup_telegram_bot.sh
+```
+
+Skrip memasang satu entri cron `@reboot` dengan marker khusus lalu memulai worker sekarang. Skrip ini tidak mengubah jadwal absen atau pengingat. Worker memakai `flock` agar tidak berjalan ganda dan mencatat pesan operasional tanpa menyimpan isi logbook ke log. Lihat `$HOME/logs/auto-absen-telegram.log` untuk status. Jika bot masih memiliki webhook terdaftar, worker berhenti dan mencatat bahwa webhook harus dihapus sebelum polling.
+
+Perintah yang tersedia:
+
+- `/logbook` — tampilkan semua entri pool dengan status terpakai/belum terpakai, lalu nilai fallback `.env`.
+- `/set activity_log <teks>` — ubah field fallback `.env`.
+- `/set lesson_learned <teks>` — ubah field fallback `.env`.
+- `/set obstacles <teks>` — ubah field fallback `.env`.
+- `/clear <field>` — bot meminta konfirmasi; kirim `/clear <field> confirm` untuk mengosongkan field tersebut.
+
+Alias `activity`, `lesson`, dan `obstacle` juga diterima. `/set` menolak teks kosong; gunakan `/clear` untuk mengosongkan nilai. Field yang dikosongkan dapat membuat pengiriman logbook berikutnya gagal, jadi isi kembali sebelum jadwal absen. Hanya chat privat dengan ID yang cocok yang dapat menjalankan perintah. Perubahan memperbarui satu nilai di `.env` dan mempertahankan pengaturan lainnya.
+
 ## Informasi Proyek
 
 ### Struktur Proyek
@@ -427,6 +452,7 @@ auto-absen-maganghub/
 ├── main.py                   titik masuk CLI (absen, status, remind, doctor)
 ├── app/
 │   ├── commands.py           perintah absen, status, remind, doctor, dry-run
+│   ├── telegram_commands.py  parser dan operasi perintah logbook Telegram
 │   ├── config.py             konfigurasi dari .env
 │   ├── auth/
 │   │   └── sso.py            login SSO Kemnaker dan access token
@@ -438,10 +464,13 @@ auto-absen-maganghub/
 │   └── utils/
 │       ├── log.py            console dan berkas absen.log
 │       ├── net.py            error jaringan dan retry
-│       ├── telegram.py       notifikasi Telegram
+│       ├── telegram.py       komunikasi dengan Telegram Bot API
 │       └── time.py           waktu zona WIB
 ├── tests/
-│   └── test_main.py          tes otomatis (pytest)
+│   ├── test_main.py          tes otomatis (pytest)
+│   ├── test_telegram_commands.py
+│   ├── test_logbook_store.py
+│   └── test_telegram_polling.py
 ├── .github/
 │   └── workflows/
 │       ├── absen.yml         penjadwalan absen GitHub Actions
@@ -453,6 +482,9 @@ auto-absen-maganghub/
 ├── setup_reminder.ps1        tugas pengingat Windows Task Scheduler
 ├── setup_reminder.bat        klik-dua-kali untuk setup_reminder.ps1
 ├── setup_cron.sh             jadwal cron Linux/VPS
+├── run_telegram_bot.py       worker polling perintah Telegram
+├── run_telegram_bot.sh       supervisor worker dengan flock
+├── setup_telegram_bot.sh     jadwal mulai ulang worker saat boot
 ├── .env.example              contoh berkas .env
 ├── requirements.txt          dependensi Python
 ├── requirements-dev.txt      dependensi pengembangan
